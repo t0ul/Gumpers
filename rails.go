@@ -44,6 +44,10 @@ var injectionRules = []namedRe{
 	{"override-role", regexp.MustCompile(`(?i)(\byou are now\b|\bdeveloper mode\b|\bdo anything now\b|\bdan mode\b|\bact as\b.{0,25}\b(dan|jailbreak|unrestricted)\b)`)},
 	{"role-escape", regexp.MustCompile(`(?i)\b(pretend|imagine|roleplay|simulate)\b.{0,30}\b(no (restrictions|rules|filters|guidelines)|unrestricted|without (any )?(limits|restrictions|rules))\b`)},
 	{"injection-delimiter", regexp.MustCompile(`(?i)(</?(system|user|assistant|instructions?)\s*>|\[/?(inst|system)\]|###\s*system)`)},
+	{"concealment", regexp.MustCompile(`(?i)do\s+not\s+(mention|reveal|tell|disclose)`)},
+	{"imperative-inject", regexp.MustCompile(`(?i)you\s+(must|are\s+required\s+to|should|need\s+to)\s+(add|include|output|send|verify|wire)`)},
+	{"assistant-directive", regexp.MustCompile(`(?i)\b(assistant|ai|system)\s+(note|instruction|directive|override)\b`)},
+	{"prompt-extraction", regexp.MustCompile(`(?i)\bwhat\s+(are|were)\s+your\s+(system\s+)?(instructions|prompt|rules)\b`)},
 }
 
 // InjectionRail blocks common prompt-injection / jailbreak patterns. Input stage.
@@ -128,4 +132,50 @@ func (c *canaryRail) Check(text string) []Hit {
 // a high-signal, zero-false-positive detector of prompt disclosure. Output stage.
 func CanaryRail(canaries ...string) Rail {
 	return &canaryRail{canaries: canaries}
+}
+
+// DetectEcho reports whether output verbatim-echoes any n-word shingle of
+// reference — an output-side system-prompt leak detector (LLM07) robust to
+// surrounding text. It returns the overlapping shingle for forensics; callers
+// must treat that snippet as secret and never log it raw. n defaults to 6.
+func DetectEcho(output, reference string, n int) (bool, string) {
+	if output == "" || reference == "" {
+		return false, ""
+	}
+	if n <= 0 {
+		n = 6
+	}
+	ref := shingleSet(reference, n)
+	for _, sh := range shingles(output, n) {
+		if ref[sh] {
+			return true, sh
+		}
+	}
+	return false, ""
+}
+
+var reShingleClean = regexp.MustCompile(`[^a-z0-9 ]+`)
+
+func shingleTokens(text string) []string {
+	return strings.Fields(reShingleClean.ReplaceAllString(strings.ToLower(text), " "))
+}
+
+func shingles(text string, n int) []string {
+	t := shingleTokens(text)
+	if len(t) < n {
+		return nil
+	}
+	out := make([]string, 0, len(t)-n+1)
+	for i := 0; i+n <= len(t); i++ {
+		out = append(out, strings.Join(t[i:i+n], " "))
+	}
+	return out
+}
+
+func shingleSet(text string, n int) map[string]bool {
+	m := make(map[string]bool)
+	for _, s := range shingles(text, n) {
+		m[s] = true
+	}
+	return m
 }
